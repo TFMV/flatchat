@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TFMV/flatchat/flatbuffers/flatchat"
+	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/gorilla/websocket"
 )
 
@@ -36,34 +38,44 @@ func TestWebSocketServer(t *testing.T) {
 		}
 	}()
 
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	// Build and send a single Flatbuffers message
+	builder := flatbuffers.NewBuilder(1024)
+	id := builder.CreateString("1")
+	user := builder.CreateString("client")
+	content := builder.CreateString("Hello from client!")
+	timestamp := uint64(time.Now().Unix())
 
-	for {
-		select {
-		case <-done:
-			return
-		case tick := <-ticker.C:
-			err := c.WriteMessage(websocket.TextMessage, []byte("Hello from client!"))
-			if err != nil {
-				t.Logf("write: %v", err)
-				return
-			}
-			t.Logf("tick: %v", tick)
-		case <-interrupt:
-			log.Println("interrupt")
+	flatchat.MessageStart(builder)
+	flatchat.MessageAddId(builder, id)
+	flatchat.MessageAddUser(builder, user)
+	flatchat.MessageAddContent(builder, content)
+	flatchat.MessageAddTimestamp(builder, timestamp)
+	flatMsg := flatchat.MessageEnd(builder)
 
-			// Cleanly close the connection by sending a close message and then waiting for the server to close the connection.
-			err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			if err != nil {
-				t.Logf("write close: %v", err)
-				return
-			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-			}
-			return
-		}
+	builder.Finish(flatMsg)
+	serializedMsg := builder.FinishedBytes()
+
+	err = c.WriteMessage(websocket.BinaryMessage, serializedMsg)
+	if err != nil {
+		t.Logf("write: %v", err)
+		return
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+	}
+
+	log.Println("interrupt")
+
+	// Cleanly close the connection by sending a close message and then waiting for the server to close the connection.
+	err = c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil {
+		t.Logf("write close: %v", err)
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
 	}
 }

@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/TFMV/flatchat/flatbuffers/flatchat"
 	"github.com/TFMV/flatchat/internal/chat"
@@ -21,7 +22,7 @@ var upgrader = websocket.Upgrader{
 func HandleChat(w http.ResponseWriter, r *http.Request, chatRepo *chat.ChatRepository) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Println("Upgrade error:", err)
 		return
 	}
 	defer conn.Close()
@@ -31,30 +32,51 @@ func HandleChat(w http.ResponseWriter, r *http.Request, chatRepo *chat.ChatRepos
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Println(err)
+			log.Println("ReadMessage error:", err)
 			break
+		}
+
+		log.Printf("Received raw message: %v", msg)
+
+		// Check buffer length to ensure it contains at least the offset size
+		if len(msg) < flatbuffers.SizeUOffsetT {
+			log.Println("Buffer too short for Flatbuffers message")
+			continue
 		}
 
 		// Deserialize message using Flatbuffers
 		flatMsg := flatchat.GetRootAsMessage(msg, 0)
+		if flatMsg == nil {
+			log.Println("Failed to get root message")
+			continue
+		}
+
+		content := flatMsg.Content()
+		if content == nil {
+			log.Println("Content is nil")
+			continue
+		}
+
 		userMessage := chat.Message{
 			Role:      "user",
-			Content:   string(flatMsg.Content()),
+			Content:   string(content),
 			Timestamp: flatMsg.Timestamp(),
 		}
 
-		log.Printf("Received message: %s", userMessage.Content)
+		log.Printf("Deserialized message: %+v", userMessage)
 
 		// Get response from ChatGPT
 		responseContent, err := chatService.ProcessMessage(userMessage)
 		if err != nil {
-			log.Println(err)
+			log.Println("ProcessMessage error:", err)
 			break
 		}
 
+		log.Printf("Sending response: %s", responseContent)
+
 		// Send the ChatGPT response back to the client
 		if err := sendMessage(conn, responseContent); err != nil {
-			log.Println(err)
+			log.Println("sendMessage error:", err)
 			break
 		}
 	}
@@ -66,7 +88,7 @@ func sendMessage(conn *websocket.Conn, content string) error {
 	id := builder.CreateString("1")
 	user := builder.CreateString("ChatGPT")
 	contentStr := builder.CreateString(content)
-	timestamp := uint64(0)
+	timestamp := uint64(time.Now().Unix())
 
 	flatchat.MessageStart(builder)
 	flatchat.MessageAddId(builder, id)
@@ -77,6 +99,8 @@ func sendMessage(conn *websocket.Conn, content string) error {
 
 	builder.Finish(flatMsg)
 	serializedMsg := builder.FinishedBytes()
+
+	log.Printf("Serialized response message: %v", serializedMsg)
 
 	return conn.WriteMessage(websocket.BinaryMessage, serializedMsg)
 }
