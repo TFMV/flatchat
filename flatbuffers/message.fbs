@@ -1,0 +1,10 @@
+namespace flatchat;
+
+table Message {
+  id: string;
+  user: string;
+  content: string;
+  timestamp: uint64;
+}
+
+root_type Message;
